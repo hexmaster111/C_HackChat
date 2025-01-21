@@ -39,7 +39,7 @@
             var nicnametb = document.getElementById("id_nickname")
             var xhr = new XMLHttpRequest();
             xhr.open("POST", "http://localhost:8082/", true);
-            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.setRequestHeader("Content-Type", "application/text");
             xhr.send(JSON.stringify(
                 {
                     from: nicnametb.value,

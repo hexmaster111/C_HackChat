@@ -214,50 +214,26 @@ void ParseJson(
     int *out_fieldvaluelen    // len of field parsed
 )
 {
-    // only supports one layer
+    int max_search_len = strlen(in_fieldname);
+    char search[max_search_len + 1]; // null terminator
 
-    int in_object = 0, in_key = 0, in_value = 0, in_key_transition = 0;
-    char tmp_buffer[MAX_MESSAGE_LEN];
-    int tmp_buffer_idx = 0;
-    memset(tmp_buffer, 0 ,sizeof(tmp_buffer));
-
+    int search_idx = 0, got_key = 0, in_key = 0;
 
     for (size_t i = 0; i < in_len; i++)
     {
         char c = *(in_start + i);
-
-        if (!in_object && !in_key && !in_value && c == '{')
-        {
-            in_object = 1;
-            continue;
-        }
-        else if (in_object && !in_key && !in_value && isspace(c))
-        {
-            continue; // skip whitespace
-        }
-        else if (in_object && !in_key && !in_value && c == '"')
+        if (!in_key && c == '"')
         {
             in_key = 1;
         }
-        else if (in_object && in_key && !in_value && c == '"'){
-            in_value = 1;
+        else if (in_key && c != '"')
+        {
+            search[search_idx] = c;
+            search_idx += 1;
+        }
+        else if (in_key && c == '"')
+        {
             in_key = 0;
-        }
-
-        if(in_key){
-            /* save it */
-            tmp_buffer[tmp_buffer_idx] = c;
-        }
-
-        if(in_key_transition){
-            /* save and at end of key check if it was in_fieldname */
-
-            if(memcmp(in_fieldname, tmp_buffer, strlen(in_fieldname))==0){
-                memcpy(out_fieldvalue, tmp_buffer, );
-            }
-
-
-            in_key_transition = 0;
         }
     }
 
@@ -267,8 +243,6 @@ void ParseJson(
         "some":"thing"
         "num":5
     }
-
-
     */
 }
 
