@@ -6,11 +6,15 @@
 #include <arpa/inet.h>
 #include <time.h>
 
+#define JSON_IMPL
+#include "json.h"
+
 #define PORT (8082)
 
 #define HTTP_200_OK "HTTP/1.1 200 OK\r\n"
 #define HTTP_404_ERR "HTTP/1.1 404 PAGE NOT FOUND\r\n"
 #define CONTENT_TEXT_HTML "Content-Type: text/html\r\n"
+#define CONTENT_TEXT_JSON "Content-Type: application/json\r\n"
 
 #define SLICE_FMT "%.*s"
 #define SLICE_PNT(SLICE) SLICE.buf ? SLICE.len : (int)sizeof("(null)"), SLICE.buf ? SLICE.buf : "(null)"
@@ -24,11 +28,18 @@ typedef struct SlicePair
     Slice name, value;
 } SlicePair;
 #define SLICE(CLIT) \
-    (Slice) { .buf = CLIT, .len = sizeof(CLIT) / sizeof(CLIT[0]) }
+    (Slice) { .buf = CLIT, .len = (sizeof(CLIT) / sizeof(CLIT[0])) - 1 }
 
 // non-zero to be not match  ... tbh idk how memcmps output works, also we just match the parts
 // of the shortest string, from the from
-int slice_cmp(Slice a, Slice b) { return memcmp(a.buf, b.buf, a.len < b.len ? a.len : b.len); }
+int slice_cmp(Slice a, Slice b)
+{
+    if (a.len != b.len)
+        return 1;
+
+    return memcmp(a.buf, b.buf, a.len);
+}
+
 int WriteBuffer(int fd, char *buffer, int bufferlen);
 
 char *HttpUrlStringSearch(char *buf, int *out_methodlen)
@@ -72,6 +83,7 @@ int AppendHTMLHeaderAndWriteBuffer(int fd, char *buffer, int bufferlen)
 // 0 ok, 0>ret bad
 int WriteBuffer(int fd, char *buffer, int bufferlen)
 {
+    printf("responding to %d\n", fd);
     int out = 0;
     do
     {
@@ -203,58 +215,157 @@ void InitMessages()
     g_next_chat = 0;
     memset(g_messages, 0, sizeof(g_messages));
 }
-#include <ctype.h>
-/* reads out a spesfic property outta a flat json */
-void ParseJson(
-    char *in_start,           // string to parse the json outta
-    int in_len,               // total len of json message
-    char *in_fieldname,       // filed to search for
-    int in_fieldvalue_maxlen, // max len of field
-    char *out_fieldvalue,     // the start pointer
-    int *out_fieldvaluelen    // len of field parsed
-)
+
+int HackChat_PostMessage(int fd, struct sockaddr_in addr, Slice body)
 {
-    int max_search_len = strlen(in_fieldname);
-    char search[max_search_len + 1]; // null terminator
+    char *ptr;
+    int len = 0;
 
-    int search_idx = 0, got_key = 0, in_key = 0;
+    ParseJson(body.buf, body.len, "from", &ptr, &len);
+    if (ptr)
+        memcpy(g_messages[g_next_chat].from_name, ptr, len > MAX_NAME_LEN ? MAX_NAME_LEN : len);
 
-    for (size_t i = 0; i < in_len; i++)
-    {
-        char c = *(in_start + i);
-        if (!in_key && c == '"')
-        {
-            in_key = 1;
-        }
-        else if (in_key && c != '"')
-        {
-            search[search_idx] = c;
-            search_idx += 1;
-        }
-        else if (in_key && c == '"')
-        {
-            in_key = 0;
-        }
-    }
+    ParseJson(body.buf, body.len, "message", &ptr, &len);
+    if (ptr)
+        memcpy(g_messages[g_next_chat].message, ptr, len > MAX_MESSAGE_LEN ? MAX_MESSAGE_LEN : len);
 
-    /*
-    {
-        "key":"value"
-        "some":"thing"
-        "num":5
-    }
-    */
+    char *n = inet_ntoa(addr.sin_addr);
+    len = strlen(n);
+
+    memcpy(g_messages[g_next_chat].from_ip, n, len > MAX_IP_LEN ? MAX_IP_LEN : len);
+
+    g_next_chat += 1;
+
+#define ok_message HTTP_200_OK "\r\n"
+    return WriteBuffer(fd, ok_message, sizeof(ok_message) / sizeof(ok_message[0]));
+#undef ok_message
 }
 
-int HackChat_PostMessage(struct sockaddr_in addr, Slice body)
+// #define resp HTTP_200_OK CONTENT_TEXT_JSON "\r\n[{\"fromid\":\"SomeHashOfTheSendersIp\", \"fromname\":\"the sender\",\"message\":\"The message that was sent\"}]"
+// return WriteBuffer(fd, resp, sizeof(resp) / sizeof(resp[0]) - 1);
+// #undef resp
+
+/* writes our g_messages in memory down the wire */
+int HackChat_WriteMessages(int fd)
 {
-    char buff[MAX_MESSAGE_LEN];
-    int len = 0;
-    memset(buff, 0, MAX_MESSAGE_LEN);
-    ParseJson(body.buf, body.len, "from", MAX_NAME_LEN, buff, &len);
-    memcpy(g_messages[g_next_chat].from_name, buff, len);
-    ParseJson(body.buf, body.len, "message", MAX_MESSAGE_LEN, buff, &len);
-    memcpy(g_messages[g_next_chat].message, buff, len);
+    int size = 1024;
+    char *buffer = calloc(1, size);
+    if (!buffer)
+    {
+        puts("OUT OF MEMORY");
+        return -1;
+    }
+
+    int i = 0;
+
+#define resp_header HTTP_200_OK CONTENT_TEXT_JSON "\r\n"
+
+#define jobject_array_start "["
+#define jobject_array_end "]"
+
+#define object_start "{"
+#define object_end "}"
+
+#define fromfieldname "\"fromname\":\""
+#define fromidfieldname "\"fromid\":\""
+#define messagefieldname "\"message\":\""
+
+#define endfromfield "\","
+#define endidfield "\","
+#define endmessagefield "\"}"
+
+#define array_another ","
+
+    memcpy(buffer, resp_header, sizeof(resp_header) - 1);
+    i += sizeof(resp_header) - 1;
+
+    // [
+    memcpy(buffer + i, jobject_array_start, sizeof(jobject_array_start) - 1);
+    i += sizeof(jobject_array_start) - 1;
+
+    for (int m = 0; m < g_next_chat; m++)
+    {
+
+        // re alloc
+        if ((i + MAX_IP_LEN + MAX_MESSAGE_LEN + MAX_NAME_LEN) > size)
+        {
+            puts("realloc");
+
+            size *= 2;
+            buffer = realloc(buffer, size);
+
+            if (!buffer)
+            {
+                puts("OUT OF MEMORY");
+                return -1;
+            }
+        }
+
+        Chat *c = &g_messages[m];
+
+        int msglen = strlen(c->message);
+        int iplen = strlen(c->from_ip);
+        int fromlen = strlen(c->from_name);
+
+        // [{
+        memcpy(buffer + i, object_start, sizeof(object_start) - 1);
+        i += sizeof(object_start) - 1;
+
+        // [{ "fromname":"
+        memcpy(buffer + i, fromfieldname, sizeof(fromfieldname) - 1);
+        i += sizeof(fromfieldname) - 1;
+
+        // [{ "fromname":"whatever goes in this field
+        memcpy(buffer + i, c->from_name, fromlen);
+        i += fromlen;
+
+        // [{ "fromname":"whatever goes in this field",
+        memcpy(buffer + i, endfromfield, sizeof(endfromfield) - 1);
+        i += sizeof(endfromfield) - 1;
+
+        // [{ "fromname":"whatever goes in this field","fromid":"
+        memcpy(buffer + i, fromidfieldname, sizeof(fromidfieldname) - 1);
+        i += sizeof(fromidfieldname) - 1;
+
+        // [{ "fromname":"whatever goes in this field","fromid":"192.168.0.123
+        memcpy(buffer + i, c->from_ip, iplen);
+        i += iplen;
+
+        // [{ "fromname":"whatever goes in this field","fromid":"192.168.0.123",
+        memcpy(buffer + i, endidfield, sizeof(endidfield) - 1);
+        i += sizeof(endidfield) - 1;
+
+        // [{ "fromname":"whatever goes in this field","fromid":"192.168.0.123","message":"
+        memcpy(buffer + i, messagefieldname, sizeof(messagefieldname) - 1);
+        i += sizeof(messagefieldname) - 1;
+
+        // [{ "fromname":"whatever goes in this field","fromid":"192.168.0.123","message":"The Message
+        memcpy(buffer + i, c->message, msglen);
+        i += msglen;
+
+        // [{ "fromname":"whatever goes in this field","fromid":"192.168.0.123","message":"The Message" }
+        memcpy(buffer + i, endmessagefield, sizeof(endmessagefield) - 1);
+        i += sizeof(endmessagefield) - 1;
+
+
+        // [{ "fromname":"whatever goes in this field","fromid":"192.168.0.123","message":"The Message" }, 
+        if (m < g_next_chat - 1)
+        {
+            /* this is NOT the last one */
+            memcpy(buffer + i, array_another, sizeof(array_another) - 1);
+            i += sizeof(array_another) - 1;
+        }
+    }
+
+    memcpy(buffer + i, jobject_array_end, sizeof(jobject_array_end) - 1);
+    i += sizeof(jobject_array_end) - 1;
+
+    int rvalue = WriteBuffer(fd, buffer, i);
+
+    free(buffer);
+    return rvalue;
+
+#undef resp_header
 }
 
 /* all strings in here are owned by the calling function, and must be coppied out */
@@ -276,9 +387,13 @@ void Route(
 
     if (slice_cmp(SLICE("POST"), method) == 0 && slice_cmp(SLICE("/"), route) == 0)
     {
-        HackChat_PostMessage(caddr, body);
+        HackChat_PostMessage(fd, caddr, body);
     }
-    if (slice_cmp(SLICE("GET"), method) == 0 && slice_cmp(SLICE("/"), route) == 0)
+    else if (slice_cmp(SLICE("GET"), method) == 0 && slice_cmp(SLICE("/messages"), route) == 0)
+    {
+        HackChat_WriteMessages(fd);
+    }
+    else if (slice_cmp(SLICE("GET"), method) == 0 && slice_cmp(SLICE("/"), route) == 0)
     {
         WriteFileDirectly(fd, "index.html");
     }

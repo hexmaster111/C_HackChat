@@ -24,6 +24,16 @@
 
 
     <script type="text/javascript">
+        function HttpGetAsync(theUrl, callback) {
+            var xmlHttp = new XMLHttpRequest();
+            xmlHttp.onreadystatechange = function () {
+                if (xmlHttp.readyState == 4 && xmlHttp.status == 200)
+                    callback(xmlHttp.responseText);
+            }
+            xmlHttp.open("GET", theUrl, true); // true for asynchronous 
+            xmlHttp.send(null);
+        }
+
 
         /** @type {HTMLTableElement} */
         // var table = document.getElementById("TblChatLog");
@@ -33,12 +43,39 @@
         // c0.innerHTML="c0"
         // c1.innerHTML="c1"
 
+        setInterval(GetMessages, 1500);
+
+
+        function MessagesIntoTable(responce) {
+            var resp = JSON.parse(responce);
+
+            /** @type {HTMLTableSectionElement} */
+            var tbl = document.getElementById("TBodyChatLog");
+            tbl.innerHTML = "";
+
+            resp.forEach(element => {
+                var item = { fromid: element.fromid, fromname: element.fromname, message: element.message };
+                var r = tbl.insertRow(-1);
+
+                var fromcell = r.insertCell(0);
+                var messagecell = r.insertCell(1);
+
+                fromcell.innerHTML = item.fromname;
+                messagecell.innerHTML = item.message;
+            });
+
+        }
+
+
+        function GetMessages() {
+            HttpGetAsync("http://192.168.21.167:8082/messages", MessagesIntoTable)
+        }
 
         function SendMessage_OnClick() {
             var msgtb = document.getElementById("id_message");
             var nicnametb = document.getElementById("id_nickname")
             var xhr = new XMLHttpRequest();
-            xhr.open("POST", "http://localhost:8082/", true);
+            xhr.open("POST", "http://192.168.21.167:8082/", true);
             xhr.setRequestHeader("Content-Type", "application/text");
             xhr.send(JSON.stringify(
                 {
@@ -53,12 +90,21 @@
 <body>
 
     <table id="TblChatLog">
-        <tr>
-            <th>From</th>
-            <th>Message</th>
-        </tr>
-    </table>
+        <thead>
+            <tr>
+                <th>From</th>
+                <th>Message</th>
+            </tr>
+        </thead>
 
+        <tbody id="TBodyChatLog">
+            <tr>
+                <td>someone</td>
+                <td>some message</td>
+            </tr>
+        </tbody>
+
+    </table>
 
     <div>
         <input type="text" id="id_nickname" placeholder="Enter Your Name" />
@@ -66,4 +112,5 @@
         <input type="button" value="Send" onclick="SendMessage_OnClick()" />
     </div>
 </body>
+
 </html>
