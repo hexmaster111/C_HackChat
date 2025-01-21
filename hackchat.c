@@ -118,35 +118,6 @@ int WriteHelloWorldHtml(int fd)
 #undef hello_world_html
 }
 
-int WriteDateTimeSkyTime(int fd)
-{
-    time_t now;
-    time(&now);
-
-    // Convert to local time
-    struct tm *local = localtime(&now);
-
-    // Format and print the date and time
-    char time_buff[100];
-    strftime(time_buff, sizeof(time_buff), "This %B the %d Day %A at the %l%p", local);
-
-#define datetime_html HTTP_200_OK CONTENT_TEXT_HTML \
-    "\r\n<!DOCTYPE html>\r\n"                       \
-    "<html>\r\n"                                    \
-    "<head></head>\r\n"                             \
-    "<body>\r\n"                                    \
-    "%s\r\n"                                        \
-    "</body>\r\n"                                   \
-    "</html>\r\n\r\n"
-
-    char outbuf[1024] = {0};
-
-    sprintf(outbuf, datetime_html, time_buff);
-
-    return WriteBuffer(fd, outbuf, strlen(outbuf));
-#undef datetime_html
-}
-
 #include <fcntl.h>
 #include <sys/stat.h>
 typedef struct file_memmap
@@ -211,9 +182,108 @@ int WriteFileDirectly(int fd, const char *fpath)
     return ret;
 }
 
+#define MAX_MESSAGE_LEN (255)
+#define MAX_NAME_LEN (25)
+#define MAX_IP_LEN (16) // 192.168.100.200
+#define MAX_SERVER_MESSAGES 500000
+
+typedef struct Chat
+{
+    char
+        message[MAX_MESSAGE_LEN],
+        from_name[MAX_NAME_LEN],
+        from_ip[MAX_IP_LEN];
+} Chat;
+
+Chat g_messages[MAX_SERVER_MESSAGES];
+int g_next_chat = 0;
+
+void InitMessages()
+{
+    g_next_chat = 0;
+    memset(g_messages, 0, sizeof(g_messages));
+}
+#include <ctype.h>
+/* reads out a spesfic property outta a flat json */
+void ParseJson(
+    char *in_start,           // string to parse the json outta
+    int in_len,               // total len of json message
+    char *in_fieldname,       // filed to search for
+    int in_fieldvalue_maxlen, // max len of field
+    char *out_fieldvalue,     // the start pointer
+    int *out_fieldvaluelen    // len of field parsed
+)
+{
+    // only supports one layer
+
+    int in_object = 0, in_key = 0, in_value = 0, in_key_transition = 0;
+    char tmp_buffer[MAX_MESSAGE_LEN];
+    int tmp_buffer_idx = 0;
+    memset(tmp_buffer, 0 ,sizeof(tmp_buffer));
 
 
+    for (size_t i = 0; i < in_len; i++)
+    {
+        char c = *(in_start + i);
 
+        if (!in_object && !in_key && !in_value && c == '{')
+        {
+            in_object = 1;
+            continue;
+        }
+        else if (in_object && !in_key && !in_value && isspace(c))
+        {
+            continue; // skip whitespace
+        }
+        else if (in_object && !in_key && !in_value && c == '"')
+        {
+            in_key = 1;
+        }
+        else if (in_object && in_key && !in_value && c == '"'){
+            in_value = 1;
+            in_key = 0;
+        }
+
+        if(in_key){
+            /* save it */
+            tmp_buffer[tmp_buffer_idx] = c;
+        }
+
+        if(in_key_transition){
+            /* save and at end of key check if it was in_fieldname */
+
+            if(memcmp(in_fieldname, tmp_buffer, strlen(in_fieldname))==0){
+                memcpy(out_fieldvalue, tmp_buffer, );
+            }
+
+
+            in_key_transition = 0;
+        }
+    }
+
+    /*
+    {
+        "key":"value"
+        "some":"thing"
+        "num":5
+    }
+
+
+    */
+}
+
+int HackChat_PostMessage(struct sockaddr_in addr, Slice body)
+{
+    char buff[MAX_MESSAGE_LEN];
+    int len = 0;
+    memset(buff, 0, MAX_MESSAGE_LEN);
+    ParseJson(body.buf, body.len, "from", MAX_NAME_LEN, buff, &len);
+    memcpy(g_messages[g_next_chat].from_name, buff, len);
+    ParseJson(body.buf, body.len, "message", MAX_MESSAGE_LEN, buff, &len);
+    memcpy(g_messages[g_next_chat].message, buff, len);
+}
+
+/* all strings in here are owned by the calling function, and must be coppied out */
 void Route(
     int fd,
     Slice request,
@@ -221,11 +291,19 @@ void Route(
     Slice route,
     Slice body,
     int url_argc,
-    SlicePair url_args[url_argc])
+    SlicePair url_args[url_argc],
+    struct sockaddr_in caddr)
 {
 
-    printf(SLICE_FMT "\n", SLICE_PNT(body));
+    printf("Route " SLICE_FMT "\n", SLICE_PNT(route));
+    printf("Method " SLICE_FMT "\n", SLICE_PNT(method));
+    printf("Body " SLICE_FMT "\n", SLICE_PNT(body));
+    // printf(SLICE_FMT "\n", SLICE_PNT(request));
 
+    if (slice_cmp(SLICE("POST"), method) == 0 && slice_cmp(SLICE("/"), route) == 0)
+    {
+        HackChat_PostMessage(caddr, body);
+    }
     if (slice_cmp(SLICE("GET"), method) == 0 && slice_cmp(SLICE("/"), route) == 0)
     {
         WriteFileDirectly(fd, "index.html");
@@ -327,7 +405,7 @@ int HttpUrlGetArgs(char *buffer, int buflen, SlicePair *dst, int dstlen)
     return dstidx;
 }
 
-void handle_request(int fd)
+void handle_request(int fd, struct sockaddr_in caddr)
 {
     char buffer[1024] = {0};
     SlicePair args[128] = {0};
@@ -374,11 +452,12 @@ void handle_request(int fd)
           (Slice){.buf = method, .len = methodlen},
           (Slice){.buf = route, .len = routelen},
           (Slice){.buf = body, .len = bodylen},
-          argc, args);
+          argc, args, caddr);
 }
 
 int main(int argc, char *argv[])
 {
+    InitMessages();
     int sfd, cfd;
     socklen_t addr_len = sizeof(struct sockaddr_in);
     struct sockaddr_in saddr, caddr;
@@ -433,7 +512,7 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        puts(inet_ntoa(caddr.sin_addr));
-        handle_request(cfd);
+        // puts(inet_ntoa(caddr.sin_addr));
+        handle_request(cfd, caddr);
     }
 }
