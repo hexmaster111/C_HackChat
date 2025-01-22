@@ -500,7 +500,7 @@ void handle_request(int fd, struct sockaddr_in caddr)
     SlicePair args[128] = {0};
 
     // i think the first word is always the method, and then the route upto the next space?
-    int r = read(fd, buffer, sizeof(buffer));
+    int r = read(fd, buffer, sizeof(buffer)-1);
     if (0 > r)
     {
         perror("read");

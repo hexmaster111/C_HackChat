@@ -83,9 +83,18 @@ static void SaveFieldValue(struct JsonParseContext *ctx, char **out_value, int *
 {
     *out_value = ctx->now;
 
+    int excape = 0;
+
     for (*out_len = 0; *out_len < ctx->remain; *out_len += 1)
     {
-        if(*(ctx->now + (*out_len)) == '"') break;
+        char c = *(ctx->now + (*out_len));
+        char cnext = *(ctx->now + 1 + (*out_len));
+
+        if (c == '"' && !excape) break;
+        else if (c == '\\' && !excape) excape = 1;
+        else if(c == '"' && excape) excape = 0;
+        else if(c == '\\' && excape) excape = 0;
+
     }
 
     // even if we dont break, we are still just saving the max len of the field value
@@ -127,10 +136,10 @@ void ParseJson(
         if (IsFieldWeCareAbout(&pctx, in_fieldname)) // if the value in the quote matches the field name (and len)
         {
             SkipToFieldStart(&pctx);
-            // username","message":"Hello world! welcom to the json!"}
+            /* username","message":"Hello world! welcom to the json!"}*/
 
             SaveFieldValue(&pctx, out_fieldvalue, out_fieldvaluelen);
-            // "message":"Hello world! welcom to the json!"}
+            /*/ "message":"Hello world! welcom to the json!"}*/
 
             return;
         }
