@@ -54,7 +54,8 @@
 
 
 <script type="text/javascript">
-    function HttpGetAsync(theUrl, callback) {
+  let SERVER_IP="http://192.168.1.11:8082"
+  function HttpGetAsync(theUrl, callback) {
         var xmlHttp = new XMLHttpRequest();
         xmlHttp.onreadystatechange = function () {
             if (xmlHttp.readyState == 4 && xmlHttp.status == 200)
@@ -118,14 +119,14 @@
 
 
     function GetMessages() {
-        HttpGetAsync("http://192.168.1.19:8082/messages", MessagesIntoTable)
+        HttpGetAsync(SERVER_IP + "/messages", MessagesIntoTable)
     }
 
     function SendMessage_OnClick() {
         var msgtb = document.getElementById("id_message");
         var nicnametb = document.getElementById("id_nickname");
         var xhr = new XMLHttpRequest();
-        xhr.open("POST", "http://192.168.1.19:8082/", true);
+        xhr.open("POST", SERVER_IP, true);
         xhr.setRequestHeader("Content-Type", "application/text");
         xhr.send(JSON.stringify(
             {
@@ -134,7 +135,7 @@
             }));
 
 
-        HttpGetAsync("http://192.168.1.19:8082/messages", MessagesIntoTable);
+        HttpGetAsync(SERVER_IP + "/messages", MessagesIntoTable);
         msgtb.value = "";
     }
 
